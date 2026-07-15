@@ -16,8 +16,18 @@
 #--------------- 실습 1 끝
 # 0.7 : 2026년 7월 15일 - 파일 로딩 로직을 safe_load_csv() 함수로 분리
 # 0.8 : 2026년 7월 15일 - Pydantic v2 검증 파이프라인 추가
+# 0.9 : 2026년 7월 15일 - valid 레코드를 CSV로, errors를 JSON으로 저장하고
+#                        다시 읽어 건수가 일치하는지 검증하는 기능 추가
+# 0.10 : 2026년 7월 15일 - 자체 테스트 추가
+#         - safe_load_csv가 존재하지 않는 파일에 None을 반환하는지 assert로 확인
+#         - ValidationError 발생 시 오류 내용을 콘솔에 즉시 출력
+#         - valid 4건 / errors 3건이 되도록 만든 테스트 데이터로 파이프라인 검증
+#         - 재로딩 후 len(reloaded)==4 assert 검증
+#         - safe_load_csv가 "sales = [...]" 할당문 형식뿐 아니라
+#           순수 JSON 배열 형식(예: Python_Practice2_Data.json)도 예외 없이 읽도록 수정
 # --------------
 
+import csv
 import json
 import logging
 import sys
@@ -47,11 +57,18 @@ def safe_load_csv(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
 
-        if "=" not in content:
-            logger.error("예상한 '변수 = [...]' 형식이 아닙니다: %s", filepath)
+        stripped_content = content.strip()
+
+        if stripped_content.startswith("[") or stripped_content.startswith("{"):
+            # 이미 순수 JSON 형식인 경우 그대로 파싱
+            json_str = stripped_content
+        elif "=" in content:
+            # "변수 = [...]" 형태의 파이썬 할당문인 경우 '=' 뒤 리스트만 추출
+            json_str = content.split("=", 1)[1].strip()
+        else:
+            logger.error("지원하지 않는 파일 형식입니다: %s", filepath)
             return None
 
-        json_str = content.split("=", 1)[1].strip()
         data = json.loads(json_str)
 
         if not isinstance(data, list) or not data:
@@ -100,6 +117,7 @@ def validate_sales(raw_sales):
     """
     raw_sales(dict 리스트)를 SalesRecord 스키마로 한 건씩 검증한다.
     원본 데이터의 'month' 필드를 SalesRecord의 'date' 필드로 매핑해서 검증한다.
+    ValidationError가 발생하면 오류 내용을 즉시 콘솔에 출력한다.
 
     반환값: (검증 통과한 원본 dict 리스트, 통과한 SalesRecord 리스트, 오류 리포트 리스트)
     """
@@ -115,9 +133,136 @@ def validate_sales(raw_sales):
             valid_rows.append(row)
             valid_records.append(record)
         except ValidationError as e:
+            print(f"[검증 오류] row {i}: {e}")
             errors.append({"row": i, "error": str(e)})
     return valid_rows, valid_records, errors
 
+
+# 결과 파일 저장 함수 : valid는 CSV로, errors는 JSON으로 저장
+def save_results(valid_records, errors, valid_path="valid.csv", errors_path="errors.json"):
+    """
+    검증을 통과한 valid_records를 CSV 파일로, errors를 JSON 파일로 저장한다.
+    파일 쓰기 중 문제가 발생하면 logger.error로 기록한다.
+    """
+    fieldnames = ["date", "region", "amount", "category"]
+    try:
+        with open(valid_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for record in valid_records:
+                writer.writerow(record.model_dump())
+    except OSError as e:
+        logger.error("valid.csv 저장 중 문제가 발생했습니다: %s", e)
+        return False
+
+    try:
+        Path(errors_path).write_text(
+            json.dumps(errors, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        logger.error("errors.json 저장 중 문제가 발생했습니다: %s", e)
+        return False
+
+    logger.info("결과 파일 저장 완료: %s(%d건), %s(%d건)", valid_path, len(valid_records), errors_path, len(errors))
+    return True
+
+
+# 재로딩 검증 함수 : 저장된 파일을 다시 읽어 건수가 일치하는지 확인
+def reload_and_verify(valid_path, errors_path, expected_valid_count, expected_error_count):
+    """
+    저장한 valid.csv와 errors.json을 다시 읽어, 저장 전 건수와 일치하는지 assert로 검증한다.
+    파일이 없거나 읽기/파싱에 실패하면 logger.error로 기록하고 False를 반환한다.
+    """
+    try:
+        with open(valid_path, "r", encoding="utf-8") as f:
+            reloaded_valid = list(csv.DictReader(f))
+    except FileNotFoundError:
+        logger.error("재로딩 실패: %s 파일을 찾을 수 없습니다.", valid_path)
+        return False
+    except OSError as e:
+        logger.error("재로딩 중 문제가 발생했습니다: %s", e)
+        return False
+
+    try:
+        reloaded_errors = json.loads(Path(errors_path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.error("재로딩 실패: %s 파일을 찾을 수 없습니다.", errors_path)
+        return False
+    except json.JSONDecodeError as e:
+        logger.error("errors.json 재로딩 중 파싱에 실패했습니다: %s", e)
+        return False
+
+    try:
+        assert len(reloaded_valid) == expected_valid_count, \
+            f"valid.csv 건수 불일치: 저장 {expected_valid_count}건, 재로딩 {len(reloaded_valid)}건"
+        assert len(reloaded_errors) == expected_error_count, \
+            f"errors.json 건수 불일치: 저장 {expected_error_count}건, 재로딩 {len(reloaded_errors)}건"
+    except AssertionError as e:
+        logger.error("재로딩 검증 실패: %s", e)
+        return False
+
+    logger.info("재로딩 검증 통과: valid.csv %d건, errors.json %d건", len(reloaded_valid), len(reloaded_errors))
+    return True
+
+
+# --------------------------------------------------------
+# Checkpoint 자체 테스트
+# --------------------------------------------------------
+# 4건은 유효, 3건은 의도적으로 검증에 실패하도록 구성한 테스트 데이터
+TEST_SALES_DATA = [
+    {"month": "2024-01", "region": "서울", "amount": 1000, "category": "전자"},   # valid
+    {"month": "2024-01", "region": "부산", "amount": 500, "category": "의류"},    # valid
+    {"month": "2024-02", "region": "대구", "amount": 700, "category": "식품"},    # valid
+    {"month": "2024-02", "region": "인천", "amount": 300, "category": None},      # valid (category 없어도 됨)
+    {"month": "", "region": "광주", "amount": 400, "category": "전자"},           # invalid: date(month) 비어있음
+    {"month": "2024-03", "region": "", "amount": 200, "category": "의류"},        # invalid: region 비어있음
+    {"month": "2024-03", "region": "대전", "amount": -50, "category": "식품"},    # invalid: amount가 0 이하
+]
+
+
+def run_self_test():
+    """
+    safe_load_csv / validate_sales / save_results / reload_and_verify 파이프라인이
+    의도한 대로 동작하는지 검증하는 자체 테스트.
+
+    Checkpoint 항목:
+      1) safe_load_csv 동작 + assert None 통과
+      2) ValidationError 발생 시 오류 내용 출력
+      3) valid 4건 / errors 3건 assert 통과
+      4) 재로딩 후 len(reloaded)==4 통과
+    """
+    print("\n[Checkpoint 자체 테스트 시작]")
+
+    # 1) safe_load_csv 동작 + assert None 통과 (존재하지 않는 파일)
+    result = safe_load_csv("존재하지_않는_파일.json")
+    assert result is None, "safe_load_csv가 존재하지 않는 파일에 대해 None을 반환하지 않음"
+    print("-> safe_load_csv(존재하지 않는 파일) None 반환 확인 (assert 통과)")
+
+    # 2) validate_sales 실행 (ValidationError 발생 시 오류 내용은 함수 내부에서 즉시 출력됨)
+    test_valid_rows, test_valid_records, test_errors = validate_sales(TEST_SALES_DATA)
+
+    # 3) valid 4건 / errors 3건 assert 통과
+    assert len(test_valid_records) == 4, f"valid 건수 불일치: {len(test_valid_records)}건 (기대값 4건)"
+    assert len(test_errors) == 3, f"errors 건수 불일치: {len(test_errors)}건 (기대값 3건)"
+    print(f"-> valid {len(test_valid_records)}건 / errors {len(test_errors)}건 assert 통과")
+
+    # 4) 결과 저장 후 재로딩하여 len(reloaded) == 4 assert 통과
+    save_results(test_valid_records, test_errors, valid_path="test_valid.csv", errors_path="test_errors.json")
+
+    with open("test_valid.csv", "r", encoding="utf-8") as f:
+        reloaded = list(csv.DictReader(f))
+    assert len(reloaded) == 4, f"재로딩 건수 불일치: {len(reloaded)}건 (기대값 4건)"
+    print(f"-> 재로딩 후 len(reloaded)=={len(reloaded)} 통과")
+
+    print("[Checkpoint 자체 테스트 완료] 모든 항목 통과\n")
+
+
+try:
+    run_self_test()
+except AssertionError as e:
+    print(f"[Checkpoint 검증 실패] {e}")
+    sys.exit(1)
 
 raw_sales = safe_load_csv("Python_Practice2_Data.json")
 if raw_sales is None:
@@ -126,12 +271,11 @@ if raw_sales is None:
 sales, valid_records, validation_errors = validate_sales(raw_sales)
 print(f"유효: {len(valid_records)}건, 오류: {len(validation_errors)}건")
 
-if validation_errors:
-    Path("errors.json").write_text(
-        json.dumps(validation_errors, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    logger.error("검증 오류 %d건을 errors.json에 저장했습니다.", len(validation_errors))
+if not save_results(valid_records, validation_errors):
+    sys.exit(1)
+
+if not reload_and_verify("valid.csv", "errors.json", len(valid_records), len(validation_errors)):
+    sys.exit(1)
 
 if not sales:
     logger.error("검증을 통과한 유효 데이터가 없어 분석을 진행할 수 없습니다.")

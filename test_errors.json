@@ -1,0 +1,14 @@
+[
+  {
+    "row": 4,
+    "error": "1 validation error for SalesRecord\ndate\n  Value error, 빈 값은 허용되지 않습니다. [type=value_error, input_value='', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error"
+  },
+  {
+    "row": 5,
+    "error": "1 validation error for SalesRecord\nregion\n  Value error, 빈 값은 허용되지 않습니다. [type=value_error, input_value='', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error"
+  },
+  {
+    "row": 6,
+    "error": "1 validation error for SalesRecord\namount\n  Value error, amount는 0보다 커야 합니다. [type=value_error, input_value=-50, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error"
+  }
+]
