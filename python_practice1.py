@@ -13,23 +13,22 @@
 # 0.5 : 2026년 7월 15일 - region_total 정확성, Counter.most_common() 순서, generator < list 메모리 크기,
 #                        amount 기준 top3 내림차순 정렬 추가 및 검증
 # 0.6 : 2026년 7월 15일 - 예외 처리 추가
-#        - 파일 읽기/파싱 실패(FileNotFoundError, OSError, JSONDecodeError) 처리
-#        - 거래 데이터에 필요한 키(region/category/amount/month)가 없는 경우 방어
-#        - 카테고리별 평균 계산 시 0으로 나누는 상황(빈 리스트) 방어
-#        - assert 검증 실패 시 트레이스백 대신 안내 메시지 출력 후 종료
-#
 #--------------- 실습 1 끝
-#
 # 0.7 : 2026년 7월 15일 - 파일 로딩 로직을 safe_load_csv() 함수로 분리
-#        - 파일 없음/파싱 실패 시 None 반환 + logger.error
-#        - 성공 시 dict 리스트 반환 + logger.info
-#        - finally 블록에서 '로딩 종료' 출력
+# 0.8 : 2026년 7월 15일 - Pydantic v2 검증 파이프라인 추가
 # --------------
 
 import json
 import logging
 import sys
 from collections import Counter, defaultdict
+from pathlib import Path
+
+try:
+    from pydantic import BaseModel, ValidationError, field_validator
+except ImportError:
+    print("[오류] pydantic 패키지가 필요합니다. 'pip install pydantic' 실행 후 다시 시도하세요.")
+    sys.exit(1)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -75,12 +74,70 @@ def safe_load_csv(filepath):
         print("로딩 종료")
 
 
-sales = safe_load_csv("Python_Practice1_Data.json")
-if sales is None:
+class SalesRecord(BaseModel):
+    #개별 매출 거래 한 건을 검증하기 위한 Pydantic v2 스키마.
+    date: str
+    region: str
+    amount: float
+    category: str | None = None
+
+    @field_validator("date", "region")
+    @classmethod
+    def not_empty(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("빈 값은 허용되지 않습니다.")
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def must_be_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("amount는 0보다 커야 합니다.")
+        return value
+
+
+def validate_sales(raw_sales):
+    """
+    raw_sales(dict 리스트)를 SalesRecord 스키마로 한 건씩 검증한다.
+    원본 데이터의 'month' 필드를 SalesRecord의 'date' 필드로 매핑해서 검증한다.
+
+    반환값: (검증 통과한 원본 dict 리스트, 통과한 SalesRecord 리스트, 오류 리포트 리스트)
+    """
+    valid_rows, valid_records, errors = [], [], []
+    for i, row in enumerate(raw_sales):
+        try:
+            record = SalesRecord(
+                date=row.get("month", ""),
+                region=row.get("region", ""),
+                amount=row.get("amount", 0),
+                category=row.get("category"),
+            )
+            valid_rows.append(row)
+            valid_records.append(record)
+        except ValidationError as e:
+            errors.append({"row": i, "error": str(e)})
+    return valid_rows, valid_records, errors
+
+
+raw_sales = safe_load_csv("Python_Practice1_Data.json")
+if raw_sales is None:
+    sys.exit(1)
+
+sales, valid_records, validation_errors = validate_sales(raw_sales)
+print(f"유효: {len(valid_records)}건, 오류: {len(validation_errors)}건")
+
+if validation_errors:
+    Path("errors.json").write_text(
+        json.dumps(validation_errors, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )   
+    logger.error("검증 오류 %d건을 errors.json에 저장했습니다.", len(validation_errors))
+
+if not sales:
+    logger.error("검증을 통과한 유효 데이터가 없어 분석을 진행할 수 없습니다.")
     sys.exit(1)
 
 # 1. amount >= 1000인 거래만 필터링 (리스트 컴프리헨션)
-# 'amount' 키가 없는 거래는 0으로 간주해 필터링에서 제외한다.
 high_value_sales = [sale for sale in sales if sale.get("amount", 0) >= 1000]
 
 print(f"amount >= 1000 거래 건수: {len(high_value_sales)}")
@@ -88,7 +145,6 @@ for sale in high_value_sales:
     print(sale)
 
 # 2. 지역별 총매출 dict (딕셔너리 컴프리헨션)
-# 'region' 키가 없는 거래는 지역 집계에서 제외한다.
 regions = {sale["region"] for sale in sales if "region" in sale}
 region_total_sales = {
     region: sum(sale.get("amount", 0) for sale in sales if sale.get("region") == region)
@@ -110,14 +166,12 @@ except AssertionError as e:
     sys.exit(1)
 
 # 3. Counter로 지역별 거래 건수 집계
-# 'region' 키가 없는 거래는 "미상"으로 집계한다.
 region_counts = Counter(sale.get("region", "미상") for sale in sales)
 
 print("\n지역별 거래 건수 (Counter):")
 for region, count in region_counts.items():
     print(f"{region}: {count}건")
 
-# most_common()으로 거래 건수 많은 순 정렬도 바로 확인 가능
 print("\n거래 건수 상위 3개 지역:")
 top3_regions_by_count = region_counts.most_common(3)
 for region, count in top3_regions_by_count:
@@ -134,7 +188,6 @@ except AssertionError as e:
     sys.exit(1)
 
 # 4. defaultdict로 카테고리별 amount 리스트 수집
-# 'category' 또는 'amount' 키가 없는 거래는 건너뛴다.
 category_amounts = defaultdict(list)
 for sale in sales:
     if "category" in sale and "amount" in sale:
@@ -144,7 +197,6 @@ print("\n카테고리별 amount 리스트 (defaultdict):")
 for category, amounts in category_amounts.items():
     print(f"{category}: {amounts}")
 
-# 카테고리별 평균 amount도 함께 확인 (빈 리스트로 인한 ZeroDivisionError 방어)
 print("\n카테고리별 평균 amount:")
 for category, amounts in category_amounts.items():
     if not amounts:
@@ -161,10 +213,7 @@ def high_value_sales_generator(data):
             yield sale
 
 
-# 리스트 버전 (컴프리헨션) : 모든 결과를 메모리에 즉시 생성/보관
 high_value_list = [sale for sale in sales if sale.get("amount", 0) > 1000]
-
-# 제너레이터 버전 : 값을 미리 만들지 않고 필요할 때마다 하나씩 생성
 high_value_gen = high_value_sales_generator(sales)
 
 list_size = sys.getsizeof(high_value_list)
@@ -175,7 +224,6 @@ print(f"리스트 버전 크기   : {list_size:,} bytes (원소 {len(high_value_
 print(f"제너레이터 버전 크기 : {gen_size:,} bytes (아직 값을 생성하지 않은 상태)")
 print(f"차이               : 약 {list_size - gen_size:,} bytes 만큼 리스트가 더 큼")
 
-# 검증 : generator sys.getsizeof < list
 try:
     assert gen_size < list_size, "제너레이터 크기가 리스트보다 작지 않음"
     print("-> generator sys.getsizeof < list 확인 (assert 통과)")
@@ -183,7 +231,6 @@ except AssertionError as e:
     print(f"[검증 실패] {e}")
     sys.exit(1)
 
-# 제너레이터는 실제로 순회해야 값을 하나씩 만들어낸다 (지연 평가 확인용)
 print("\n제너레이터로 순회하며 값 확인 (앞 3개만):")
 for i, sale in enumerate(high_value_sales_generator(sales)):
     if i >= 3:
@@ -191,12 +238,9 @@ for i, sale in enumerate(high_value_sales_generator(sales)):
     print(sale)
 
 # 6. month·category 기준 그룹핑 총매출 dict (컴프리헨션 + defaultdict)
-# 'month' 또는 'category' 키가 없는 거래는 그룹 목록 산출에서 제외한다.
 months = sorted({sale["month"] for sale in sales if "month" in sale})
 categories = sorted({sale["category"] for sale in sales if "category" in sale})
 
-# 먼저 딕셔너리 컴프리헨션으로 (month, category) 조합별 총매출을 계산하고,
-# 그 결과를 defaultdict(float)로 감싸서 없는 키를 조회해도 KeyError 없이 0.0이 나오게 한다.
 month_category_sales = defaultdict(float, {
     (month, category): sum(
         sale.get("amount", 0) for sale in sales
@@ -213,7 +257,6 @@ for month in months:
         total = month_category_sales[(month, category)]
         print(f"  {category}: {total:,.0f}")
 
-# defaultdict 특성 확인: 존재하지 않는 조합을 조회해도 KeyError 없이 0.0 반환
 print("\n존재하지 않는 조합 조회 예시 (defaultdict 동작 확인):")
 print(f"('2099-01', '없는카테고리') -> {month_category_sales[('2099-01', '없는카테고리')]}")
 
