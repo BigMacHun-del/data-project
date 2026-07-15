@@ -8,9 +8,11 @@
 # 변경사항 내역
 # 0.1 : 2026년 7월 15일 - 최초 작성
 # 0.2 : 2026년 7월 15일 - Counter(지역별 거래 건수), defaultdict(카테고리별 amount 리스트) 추가
+# 0.3 : 2026년 7월 15일 - amount > 1000 제너레이터 추가, 리스트 버전과 메모리 크기 비교 추가
 # --------------
 
 import json
+import sys
 from collections import Counter, defaultdict
 
 # 파일이 순수 JSON이 아니라 "sales = [...]" 형태의 파이썬 변수 할당문이므로
@@ -65,3 +67,32 @@ print("\n카테고리별 평균 amount:")
 for category, amounts in category_amounts.items():
     avg = sum(amounts) / len(amounts)
     print(f"{category}: 평균 {avg:.1f} (건수: {len(amounts)})")
+
+# 5. amount > 1000 인 행만 yield 하는 제너레이터, 리스트 버전과 메모리 비교
+def high_value_sales_generator(data):
+    """amount > 1000인 거래만 하나씩 yield하는 제너레이터"""
+    for sale in data:
+        if sale["amount"] > 1000:
+            yield sale
+
+
+# 리스트 버전 (컴프리헨션) : 모든 결과를 메모리에 즉시 생성/보관
+high_value_list = [sale for sale in sales if sale["amount"] > 1000]
+
+# 제너레이터 버전 : 값을 미리 만들지 않고 필요할 때마다 하나씩 생성
+high_value_gen = high_value_sales_generator(sales)
+
+list_size = sys.getsizeof(high_value_list)
+gen_size = sys.getsizeof(high_value_gen)
+
+print("\n[리스트 vs 제너레이터 메모리 크기 비교] (amount > 1000)")
+print(f"리스트 버전 크기   : {list_size:,} bytes (원소 {len(high_value_list)}개 포함)")
+print(f"제너레이터 버전 크기 : {gen_size:,} bytes (아직 값을 생성하지 않은 상태)")
+print(f"차이               : 약 {list_size - gen_size:,} bytes 만큼 리스트가 더 큼")
+
+# 제너레이터는 실제로 순회해야 값을 하나씩 만들어낸다 (지연 평가 확인용)
+print("\n제너레이터로 순회하며 값 확인 (앞 3개만):")
+for i, sale in enumerate(high_value_sales_generator(sales)):
+    if i >= 3:
+        break
+    print(sale)
