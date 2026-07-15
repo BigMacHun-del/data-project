@@ -119,7 +119,7 @@ def validate_sales(raw_sales):
     return valid_rows, valid_records, errors
 
 
-raw_sales = safe_load_csv("Python_Practice1_Data.json")
+raw_sales = safe_load_csv("Python_Practice2_Data.json")
 if raw_sales is None:
     sys.exit(1)
 
@@ -130,7 +130,7 @@ if validation_errors:
     Path("errors.json").write_text(
         json.dumps(validation_errors, ensure_ascii=False, indent=2),
         encoding="utf-8",
-    )   
+    )
     logger.error("검증 오류 %d건을 errors.json에 저장했습니다.", len(validation_errors))
 
 if not sales:
