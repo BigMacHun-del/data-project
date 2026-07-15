@@ -17,38 +17,66 @@
 #        - 거래 데이터에 필요한 키(region/category/amount/month)가 없는 경우 방어
 #        - 카테고리별 평균 계산 시 0으로 나누는 상황(빈 리스트) 방어
 #        - assert 검증 실패 시 트레이스백 대신 안내 메시지 출력 후 종료
+#
+#--------------- 실습 1 끝
+#
+# 0.7 : 2026년 7월 15일 - 파일 로딩 로직을 safe_load_csv() 함수로 분리
+#        - 파일 없음/파싱 실패 시 None 반환 + logger.error
+#        - 성공 시 dict 리스트 반환 + logger.info
+#        - finally 블록에서 '로딩 종료' 출력
 # --------------
 
 import json
+import logging
 import sys
 from collections import Counter, defaultdict
 
-# 파일이 순수 JSON이 아니라 "sales = [...]" 형태의 파이썬 변수 할당문이므로
-# '=' 뒤의 리스트 부분만 잘라내서 JSON으로 파싱한다.
-try:
-    with open("Python_Practice1_Data.json", "r", encoding="utf-8") as f:
-        content = f.read()
-except FileNotFoundError:
-    print("[오류] 파일을 찾을 수 없습니다: Python_Practice1_Data.json")
-    sys.exit(1)
-except OSError as e:
-    print(f"[오류] 파일을 읽는 중 문제가 발생했습니다: {e}")
-    sys.exit(1)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
-if "=" not in content:
-    print("[오류] 예상한 '변수 = [...]' 형식이 아닙니다.")
-    sys.exit(1)
+# 파일 로딩 함수
+def safe_load_csv(filepath):
+    """
+    매출 데이터 파일을 안전하게 읽어 dict 리스트로 반환한다.
 
-json_str = content.split("=", 1)[1].strip()
+    - 파일이 없거나(FileNotFoundError) 읽기/파싱 중 오류가 발생하면
+      logger.error로 기록하고 None을 반환한다.
+    - 정상적으로 읽고 파싱에 성공하면 dict 리스트를 반환하며 logger.info로 기록한다.
+    - 성공/실패 여부와 관계없이 finally에서 '로딩 종료'를 출력한다.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
 
-try:
-    sales = json.loads(json_str)
-except json.JSONDecodeError as e:
-    print(f"[오류] JSON 파싱에 실패했습니다: {e}")
-    sys.exit(1)
+        if "=" not in content:
+            logger.error("예상한 '변수 = [...]' 형식이 아닙니다: %s", filepath)
+            return None
 
-if not isinstance(sales, list) or not sales:
-    print("[오류] 매출 데이터가 비어 있거나 리스트 형태가 아닙니다.")
+        json_str = content.split("=", 1)[1].strip()
+        data = json.loads(json_str)
+
+        if not isinstance(data, list) or not data:
+            logger.error("매출 데이터가 비어 있거나 리스트 형태가 아닙니다: %s", filepath)
+            return None
+
+        logger.info("파일 로딩 성공: %s (거래 %d건)", filepath, len(data))
+        return data
+
+    except FileNotFoundError:
+        logger.error("파일을 찾을 수 없습니다: %s", filepath)
+        return None
+    except OSError as e:
+        logger.error("파일을 읽는 중 문제가 발생했습니다: %s", e)
+        return None
+    except json.JSONDecodeError as e:
+        logger.error("JSON 파싱에 실패했습니다: %s", e)
+        return None
+    finally:
+        print("로딩 종료")
+
+
+sales = safe_load_csv("Python_Practice1_Data.json")
+if sales is None:
     sys.exit(1)
 
 # 1. amount >= 1000인 거래만 필터링 (리스트 컴프리헨션)
