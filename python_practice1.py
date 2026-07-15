@@ -9,6 +9,7 @@
 # 0.1 : 2026년 7월 15일 - 최초 작성
 # 0.2 : 2026년 7월 15일 - Counter(지역별 거래 건수), defaultdict(카테고리별 amount 리스트) 추가
 # 0.3 : 2026년 7월 15일 - amount > 1000 제너레이터 추가, 리스트 버전과 메모리 크기 비교 추가
+# 0.4 : 2026년 7월 15일 - month·category 기준 그룹핑 총매출 dict 추가 (컴프리헨션 + defaultdict)
 # --------------
 
 import json
@@ -96,3 +97,29 @@ for i, sale in enumerate(high_value_sales_generator(sales)):
     if i >= 3:
         break
     print(sale)
+
+# 6. month·category 기준 그룹핑 총매출 dict (컴프리헨션 + defaultdict)
+months = sorted({sale["month"] for sale in sales})
+categories = sorted({sale["category"] for sale in sales})
+
+# 먼저 딕셔너리 컴프리헨션으로 (month, category) 조합별 총매출을 계산하고,
+# 그 결과를 defaultdict(float)로 감싸서 없는 키를 조회해도 KeyError 없이 0.0이 나오게 한다.
+month_category_sales = defaultdict(float, {
+    (month, category): sum(
+        sale["amount"] for sale in sales
+        if sale["month"] == month and sale["category"] == category
+    )
+    for month in months
+    for category in categories
+})
+
+print("\nmonth·category별 총매출 (defaultdict + 컴프리헨션):")
+for month in months:
+    print(f"[{month}]")
+    for category in categories:
+        total = month_category_sales[(month, category)]
+        print(f"  {category}: {total:,.0f}")
+
+# defaultdict 특성 확인: 존재하지 않는 조합을 조회해도 KeyError 없이 0.0 반환
+print("\n존재하지 않는 조합 조회 예시 (defaultdict 동작 확인):")
+print(f"('2099-01', '없는카테고리') -> {month_category_sales[('2099-01', '없는카테고리')]}")
