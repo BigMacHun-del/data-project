@@ -10,6 +10,8 @@
 # 0.2 : 2026년 7월 15일 - Counter(지역별 거래 건수), defaultdict(카테고리별 amount 리스트) 추가
 # 0.3 : 2026년 7월 15일 - amount > 1000 제너레이터 추가, 리스트 버전과 메모리 크기 비교 추가
 # 0.4 : 2026년 7월 15일 - month·category 기준 그룹핑 총매출 dict 추가 (컴프리헨션 + defaultdict)
+# 0.5 : 2026년 7월 15일 - region_total 정확성, Counter.most_common() 순서, generator < list 메모리 크기,
+#                        amount 기준 top3 내림차순 정렬 추가 및 검증
 # --------------
 
 import json
@@ -42,6 +44,12 @@ print("\n지역별 총매출:")
 for region, total in region_total_sales.items():
     print(f"{region}: {total}")
 
+# 검증 : region_total 값 정확성
+for region in regions:
+    expected_total = sum(sale["amount"] for sale in sales if sale["region"] == region)
+    assert region_total_sales[region] == expected_total, f"{region} 총매출 불일치"
+print("-> region_total 값 정확 (assert 통과)")
+
 # 3. Counter로 지역별 거래 건수 집계
 region_counts = Counter(sale["region"] for sale in sales)
 
@@ -51,8 +59,15 @@ for region, count in region_counts.items():
 
 # most_common()으로 거래 건수 많은 순 정렬도 바로 확인 가능
 print("\n거래 건수 상위 3개 지역:")
-for region, count in region_counts.most_common(3):
+top3_regions_by_count = region_counts.most_common(3)
+for region, count in top3_regions_by_count:
     print(f"{region}: {count}건")
+
+# 검증 : Counter.most_common() 순서 정확성
+for i in range(len(top3_regions_by_count) - 1):
+    assert top3_regions_by_count[i][1] >= top3_regions_by_count[i + 1][1], \
+        "Counter.most_common() 순서 오류"
+print("-> Counter.most_common() 순서 정확")
 
 # 4. defaultdict로 카테고리별 amount 리스트 수집
 category_amounts = defaultdict(list)
@@ -91,6 +106,10 @@ print(f"리스트 버전 크기   : {list_size:,} bytes (원소 {len(high_value_
 print(f"제너레이터 버전 크기 : {gen_size:,} bytes (아직 값을 생성하지 않은 상태)")
 print(f"차이               : 약 {list_size - gen_size:,} bytes 만큼 리스트가 더 큼")
 
+# 검증 : generator sys.getsizeof < list
+assert gen_size < list_size, "제너레이터 크기가 리스트보다 작지 않음"
+print("-> generator sys.getsizeof < list 확인 (assert 통과)")
+
 # 제너레이터는 실제로 순회해야 값을 하나씩 만들어낸다 (지연 평가 확인용)
 print("\n제너레이터로 순회하며 값 확인 (앞 3개만):")
 for i, sale in enumerate(high_value_sales_generator(sales)):
@@ -123,3 +142,16 @@ for month in months:
 # defaultdict 특성 확인: 존재하지 않는 조합을 조회해도 KeyError 없이 0.0 반환
 print("\n존재하지 않는 조합 조회 예시 (defaultdict 동작 확인):")
 print(f"('2099-01', '없는카테고리') -> {month_category_sales[('2099-01', '없는카테고리')]}")
+
+# 7. amount 기준 top3 거래 (내림차순 정렬)
+top3_by_amount = sorted(sales, key=lambda sale: sale["amount"], reverse=True)[:3]
+
+print("\namount 기준 top3 거래 (내림차순):")
+for sale in top3_by_amount:
+    print(sale)
+
+# 검증 : amount 기준 top3 내림차순 정렬 정확성
+for i in range(len(top3_by_amount) - 1):
+    assert top3_by_amount[i]["amount"] >= top3_by_amount[i + 1]["amount"], \
+        "top3 금액 내림차순 정렬 오류"
+print("-> top3 금액 내림차순 정렬 정확 (assert 통과)")
